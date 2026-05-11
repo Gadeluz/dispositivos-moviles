@@ -1,0 +1,224 @@
+package com.example.starwars
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.example.starwars.ui.theme.StarwarsTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
+
+// 1. Modelos de datos
+data class Character(
+    val name: String,
+    val url: String
+) {
+    val id: String
+        get() = url.trimEnd('/').split('/').lastOrNull() ?: "1"
+
+    // URL de imágenes reales de Star Wars
+    val imageUrl: String
+        get() = "https://starwars-visualguide.com/assets/img/characters/$id.jpg"
+}
+
+data class CharacterResponse(
+    val results: List<Character>
+)
+
+// 2. Interfaz de la API
+interface ApiService {
+    @GET("people/")
+    suspend fun getCharacters(@Query("search") query: String? = null): CharacterResponse
+}
+
+object RetrofitClient {
+    private const val BASE_URL = "https://swapi.py4e.com/api/"
+
+    val apiService: ApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ApiService::class.java)
+    }
+}
+
+// 3. Estados de la Interfaz
+sealed class UiState {
+    object Loading : UiState()
+    data class Success(val characters: List<Character>) : UiState()
+    data class Error(val message: String) : UiState()
+}
+
+class MainActivity : ComponentActivity() {
+    @OptIn(ExperimentalMaterial3Api::class)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            StarwarsTheme {
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    topBar = {
+                        CenterAlignedTopAppBar(
+                            title = { Text("Buscador Star Wars") },
+                            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                titleContentColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
+                ) { innerPadding ->
+                    StarWarsSearchScreen(modifier = Modifier.padding(innerPadding))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StarWarsSearchScreen(modifier: Modifier = Modifier) {
+    var query by remember { mutableStateOf("") }
+    var uiState by remember { mutableStateOf<UiState>(UiState.Loading) }
+    val scope = rememberCoroutineScope()
+
+    val initialCharacters = listOf(
+        Character("Luke Skywalker", "https://swapi.py4e.com/api/people/1/"),
+        Character("Darth Vader", "https://swapi.py4e.com/api/people/4/"),
+        Character("R2-D2", "https://swapi.py4e.com/api/people/3/"),
+        Character("C-3PO", "https://swapi.py4e.com/api/people/2/"),
+        Character("Leia Organa", "https://swapi.py4e.com/api/people/5/")
+    )
+
+    fun performSearch(s: String? = null) {
+        uiState = UiState.Loading
+        scope.launch {
+            try {
+                val response = RetrofitClient.apiService.getCharacters(s?.ifBlank { null })
+                uiState = if (response.results.isEmpty() && s.isNullOrBlank()) {
+                    UiState.Success(initialCharacters)
+                } else {
+                    UiState.Success(response.results)
+                }
+            } catch (e: Exception) {
+                uiState = UiState.Error("Error de conexión. Inténtalo de nuevo.")
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { performSearch() }
+
+    LaunchedEffect(query) {
+        if (query.isNotEmpty()) {
+            delay(500)
+            performSearch(query)
+        } else if (uiState !is UiState.Loading) {
+            performSearch()
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            placeholder = { Text("Ej: Yoda, Obi-Wan...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            singleLine = true,
+            shape = CircleShape
+        )
+
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            when (val state = uiState) {
+                is UiState.Loading -> CircularProgressIndicator()
+                is UiState.Success -> CharacterList(state.characters)
+                is UiState.Error -> {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(state.message, color = MaterialTheme.colorScheme.error)
+                        Button(onClick = { performSearch(query) }) { Text("Reintentar") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CharacterList(characters: List<Character>) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        items(characters) { character -> CharacterItem(character) }
+    }
+}
+
+@Composable
+fun CharacterItem(character: Character) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(4.dp)
+    ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(character.imageUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = character.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    // Si falla la imagen específica, mostramos un icono genérico
+                    error = null
+                )
+                // Si no hay imagen, mostramos un icono de usuario
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column {
+                Text(text = character.name, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "Personaje de Star Wars",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+        }
+    }
+}
